@@ -19,6 +19,7 @@
 from absl import logging
 import gin
 from group_testing.group_selectors import group_selector
+import jax
 import jax.numpy as np
 import numpy as onp
 
@@ -123,4 +124,35 @@ class SplitPositive(group_selector.GroupSelector):
 
     else:
       state.all_cleared = True
+    return state
+
+@gin.configurable
+class TwoDDorfmanPostSelector(group_selector.GroupSelector):
+  """Selects groups following tests described in two_d_dorfman from origamy.py
+
+  This implements the selector used in the second stage of
+  https://www.fda.gov/media/141951/download
+
+  This selector looks at 20 groups extracted from a 8 x 12 assay matrix,
+  (8 rows, 12 columns) and takes all individual samples located at
+  intersections between these groups to add them back, as individual tests,
+  in the tests that need to be tested.
+  """
+
+  NEEDS_POSTERIOR = False
+
+
+
+  def __call__(self, rng, state):
+    """Produces new groups from 1st wave of results & adds them to stack."""
+    # sum groups that have returned positive
+    returned_positive = np.sum(
+        state.past_groups[state.past_test_results, :], axis=0)
+    # test individually those that returned positive at least twice.
+    twice_positive, = np.where(returned_positive > 1)
+    all_new_groups = jax.nn.one_hot(twice_positive, state.num_patients).astype(bool)
+    state.add_groups_to_test(all_new_groups)
+    logging.warning('Added %i groups to test', all_new_groups.shape[0])
+    logging.debug(all_new_groups.astype(np.int32))
+    state.all_cleared = True
     return state

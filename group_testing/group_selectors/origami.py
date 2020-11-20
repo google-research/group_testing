@@ -255,6 +255,14 @@ def origami_m3():
   return np.array(new_groups, dtype=bool)
 
 
+def two_d_dorfman():
+  """2D Dorfman groups."""
+  new_groups = np.concatenate( (
+      np.kron(np.eye(8), np.ones((1,12)) ),
+      np.kron(np.ones((1,8)),np.eye(12))) )
+  return np.array(new_groups, dtype=bool)
+
+
 def origami_m2():
   """Origami M2."""
   new_groups = onp.zeros((22, 231))
@@ -293,7 +301,8 @@ class Origami(group_selector.GroupSelector):
       68: origami_l5,
       70: origami_m3,
       231: origami_m2,
-      274: origami_l3
+      274: origami_l3,
+      96 : two_d_dorfman
   }
 
   def get_groups(self, rng, state):
