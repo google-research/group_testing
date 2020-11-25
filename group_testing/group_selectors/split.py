@@ -126,9 +126,10 @@ class SplitPositive(group_selector.GroupSelector):
       state.all_cleared = True
     return state
 
+
 @gin.configurable
 class TwoDDorfmanPostSelector(group_selector.GroupSelector):
-  """Selects groups following tests described in two_d_dorfman from origamy.py
+  """Selects groups following tests described in two_d_dorfman from origamy.py.
 
   This implements the selector used in the second stage of
   https://www.fda.gov/media/141951/download
@@ -136,23 +137,37 @@ class TwoDDorfmanPostSelector(group_selector.GroupSelector):
   This selector looks at 20 groups extracted from a 8 x 12 assay matrix,
   (8 rows, 12 columns) and takes all individual samples located at
   intersections between these groups to add them back, as individual tests,
-  in the tests that need to be tested.
+  in the tests that need to be tested. If no rows test positive but one or more
+  columns test positive (or vice versa), everyone is tested.
   """
 
   NEEDS_POSTERIOR = False
 
-
-
   def __call__(self, rng, state):
     """Produces new groups from 1st wave of results & adds them to stack."""
-    # sum groups that have returned positive
-    returned_positive = np.sum(
-        state.past_groups[state.past_test_results, :], axis=0)
-    # test individually those that returned positive at least twice.
-    twice_positive, = np.where(returned_positive > 1)
-    all_new_groups = jax.nn.one_hot(twice_positive, state.num_patients).astype(bool)
-    state.add_groups_to_test(all_new_groups)
-    logging.warning('Added %i groups to test', all_new_groups.shape[0])
-    logging.debug(all_new_groups.astype(np.int32))
-    state.all_cleared = True
+    num_rows = 8
+    num_cols = 12
+    # check this is the first time selector is called (or equival
+    if state.past_groups.shape[0] == num_rows + num_cols:
+      # sum groups that have returned positive
+      returned_positive = np.sum(
+          state.past_groups[state.past_test_results, :], axis=0)
+      total_positive_first_block = np.sum(state.past_test_results[0:num_rows],
+                                          axis=0)
+      total_positive_second_block = np.sum(
+          state.past_test_results[num_rows:num_rows+num_cols], axis=0)
+      if (total_positive_first_block * total_positive_second_block == 0 and
+          total_positive_first_block + total_positive_second_block > 0):
+        # test everyone
+        new_groups = np.eye(state.num_patients).astype(bool)
+      else:
+        # test individually those that returned positive at least twice.
+        twice_positive, = np.where(returned_positive > 1)
+        new_groups = jax.nn.one_hot(twice_positive,
+                                    state.num_patients).astype(bool)
+      state.add_groups_to_test(new_groups)
+      logging.warning('Added %i groups to test', new_groups.shape[0])
+      logging.debug(new_groups.astype(np.int32))
+    else:
+      state.all_cleared = True
     return state

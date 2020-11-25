@@ -16,13 +16,15 @@
 # Lint as: python3
 """Defines a greedy selector based on maximizing the mutual information."""
 
+import functools
+
 from absl import logging
 import gin
-import jax
-import jax.numpy as np
 from group_testing import metrics
 from group_testing import utils
 from group_testing.group_selectors import group_selector
+import jax
+import jax.numpy as np
 
 
 def collapse_particles(rng, particle_weights, particles):
@@ -47,11 +49,88 @@ def collapse_particles(rng, particle_weights, particles):
   return new_weights, new_particles
 
 
-def joint_mi_criterion_mg(particle_weights,
-                          particles,
-                          cur_group,
-                          cur_positives,
-                          previous_groups_prob_particles_states,
+def probabilities_new_test(positive_in_group,
+                           specificity,
+                           rho):
+  """Computes binary probability of a test given there is positive is in it.
+
+  Args:
+    positive_in_group: [num_particles,] of bools, whether group has a positive
+      patient in the particle considered.
+    specificity: float, specificity of test for group size under consideration
+    rho: float, combination of specificity and sensitivity.
+
+  Returns:
+    [num_particle, 2] array of probabilities.
+  """
+  return np.stack(
+      ((specificity - rho * positive_in_group),
+       (1 - specificity + rho * positive_in_group)),
+      axis=-1)
+
+
+def upd_prob_groups_x_particle_x_states(
+    prob_prev_groups_of_particles_x_states, positive_in_group,
+    specificity, rho):
+  """Given test probabilities of k groups, add one test outcome.
+
+  Args:
+    prob_prev_groups_of_particles_x_states: [num_particles,2^k] prob. table of
+      k tests taking one of 2^k possible configurations when ground state is
+      assumed to be one of the particles.
+    positive_in_group:  [num_particles,] of bools, whether group of interest
+      has a positive patient in the particle considered.
+    specificity: float, specificity of test for group size under consideration
+    rho: float, combination of specificity and sensitivity.
+  Returns:
+    Augmented [num_particles, 2^(k+1)] prob. table.
+  """
+  prob_new_test = probabilities_new_test(positive_in_group, specificity, rho)
+
+  # TODO(cuturi) this could be improved.
+  # rather than storing a matrix with output dimension 2^k, it is possible
+  # to do that 2^k x num_patients multiply with 2^{k-1} steps and binary
+  # expansions at each iteration.
+  return np.concatenate((prob_new_test[:, 0][:, np.newaxis] *
+                         prob_prev_groups_of_particles_x_states,
+                         prob_new_test[:, 1][:, np.newaxis] *
+                         prob_prev_groups_of_particles_x_states),
+                        axis=1)
+
+
+@jax.jit
+@functools.partial(jax.vmap, in_axes=[0, None, None, None, None])
+def compute_whole_entropy_groups(positive_in_group, specificity, rho,
+                                 particle_weights,
+                                 prob_prev_groups_of_particles_x_states):
+  """For a j-th candidate group, compute entropy of 2^{j} possible outcomes.
+
+  Args:
+    positive_in_group: [num_particles,] array of bools, whether group of
+      interest has a positive patient in the particle considered.
+    specificity: float, specificity of test for group size under consideration
+    rho: float, combination of specificity and sensitivity.
+    particle_weights: [num_particles,] array of floats, sum to 1.
+    prob_prev_groups_of_particles_x_states: [num_particles, 2^k] prob. table  of
+      k tests taking one of 2^k possible configurations when ground state is
+      assumed to be one of the particles.
+  Returns:
+    a float
+  """
+
+  prob_new_test = probabilities_new_test(positive_in_group, specificity, rho)
+  # we now incorporate previous probability of all previous groups added so far
+  # and expand x 2 the state space of possible test results, and sum to get
+  # exactly the 2 x 2^k probabilities of each combination of k+1 test results
+  n_p_prev_groups_prob_states = np.dot(
+      prob_prev_groups_of_particles_x_states.T,
+      prob_new_test * particle_weights[:, np.newaxis])
+  # compute entropy of this 2 x 2^k matrix of probabilities.
+  return metrics.entropy(n_p_prev_groups_prob_states, axis=None)
+
+
+def joint_mi_criterion_mg(particle_weights, particles, cur_group, cur_positives,
+                          prob_prev_groups_of_particles_x_states,
                           previous_groups_cumcond_entropy,
                           sensitivity,
                           specificity,
@@ -75,7 +154,8 @@ def joint_mi_criterion_mg(particle_weights,
    particles: particles summarizing belief about infection status
    cur_group: group currently considered to add to former groups.
    cur_positives: stores which particles would test positive w.r.t cur_group
-   previous_groups_prob_particles_states: particles x test outcome probabilities
+   prob_prev_groups_of_particles_x_states: particles x test outcome
+     probabilities
    previous_groups_cumcond_entropy: previous conditional entropies
    sensitivity: value (vector) of sensitivity(-ies depending on group size).
    specificity: value (vector) of specificity(-ies depending on group size).
@@ -121,37 +201,9 @@ def joint_mi_criterion_mg(particle_weights,
       particle_weights[np.newaxis, :] * positive_in_groups, axis=1)
   rho = specificity + sensitivity - 1
 
-  # positive_in_groups defines probability of two possible outcomes for the test
-  # of each new candidate group.
-  probabilities_new_test = np.stack(
-      (specificity - rho * positive_in_groups,
-       1 - specificity + rho * positive_in_groups),
-      axis=-1)
-  # we now incorporate previous probability of all previous groups added so far
-  # and expand x 2 the state space of possible test results.
-  new_plus_previous_groups_prob_particles_states = np.concatenate(
-      (probabilities_new_test[:, :, 0][:, :, np.newaxis] *
-       previous_groups_prob_particles_states[np.newaxis, :, :],
-       probabilities_new_test[:, :, 1][:, :, np.newaxis] *
-       previous_groups_prob_particles_states[np.newaxis, :, :]),
-      axis=2)
-
-  # average over particles to recover probability of all 2^j possible
-  # test results
-  new_plus_previous_groups_prob_states = np.sum(
-      particle_weights[np.newaxis, :, np.newaxis] *
-      new_plus_previous_groups_prob_particles_states,
-      axis=1)
-
-  whole_entropy = metrics.entropy(
-      new_plus_previous_groups_prob_states, axis=1)
-
-  # exhaustive way to compute cond entropy, useful to check
-  # computations.
-  # cond_entropy_old = np.sum(
-  #     particle_weights[np.newaxis, :] *
-  #     entropy(new_plus_previous_groups_prob_particles_states, axis=2),
-  #     axis=1)
+  whole_entropy = compute_whole_entropy_groups(
+      positive_in_groups, specificity, rho, particle_weights,
+      prob_prev_groups_of_particles_x_states)
   objectives = whole_entropy - cond_entropy
 
   # greedy selection of largest/smallest value
@@ -171,8 +223,9 @@ def joint_mi_criterion_mg(particle_weights,
   # refresh the status of vector positives
   cur_positives = positive_in_groups[index, :]
   new_objective = objectives[index]
-  prob_particles_states = new_plus_previous_groups_prob_particles_states[
-      index, :, :]
+  prob_particles_states = upd_prob_groups_x_particle_x_states(
+      prob_prev_groups_of_particles_x_states, cur_positives,
+      specificity, rho)
   new_cond_entropy = cond_entropy[index]
   return (cur_group, cur_positives, new_objective,
           prob_particles_states, new_cond_entropy)
