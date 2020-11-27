@@ -24,7 +24,6 @@ import jax.numpy as np
 import numpy as onp
 
 
-
 @gin.configurable
 class SplitSelector(group_selector.GroupSelector):
   """Split the patients into sub groups."""
@@ -147,7 +146,7 @@ class TwoDDorfmanPostSelector(group_selector.GroupSelector):
     """Produces new groups from 1st wave of results & adds them to stack."""
     num_rows = 8
     num_cols = 12
-    # check this is the first time selector is called (or equival
+    # check this is the first time selector is called (or not used)
     if state.past_groups.shape[0] == num_rows + num_cols:
       # sum groups that have returned positive
       returned_positive = np.sum(
@@ -156,15 +155,15 @@ class TwoDDorfmanPostSelector(group_selector.GroupSelector):
                                           axis=0)
       total_positive_second_block = np.sum(
           state.past_test_results[num_rows:num_rows+num_cols], axis=0)
-      if (total_positive_first_block * total_positive_second_block == 0 and
-          total_positive_first_block + total_positive_second_block > 0):
-        # test everyone
-        new_groups = np.eye(state.num_patients).astype(bool)
+      # check if incoherence in row/columns
+      if np.logical_xor(total_positive_first_block > 0,
+                        total_positive_second_block > 0):
+        # test everyone that was ever included in a positive group
+        reflex_to_test, = np.where(returned_positive)
       else:
         # test individually those that returned positive at least twice.
-        twice_positive, = np.where(returned_positive > 1)
-        new_groups = jax.nn.one_hot(twice_positive,
-                                    state.num_patients).astype(bool)
+        reflex_to_test, = np.where(returned_positive > 1)
+      new_groups = jax.nn.one_hot(reflex_to_test, state.num_patients).astype(bool)
       state.add_groups_to_test(new_groups)
       logging.warning('Added %i groups to test', new_groups.shape[0])
       logging.debug(new_groups.astype(np.int32))

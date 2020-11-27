@@ -100,7 +100,9 @@ def upd_prob_groups_x_particle_x_states(
 
 @jax.jit
 @functools.partial(jax.vmap, in_axes=[0, None, None, None, None])
-def compute_whole_entropy_groups(positive_in_group, specificity, rho,
+def compute_whole_entropy_groups(positive_in_group,
+                                 specificity,
+                                 rho,
                                  particle_weights,
                                  prob_prev_groups_of_particles_x_states):
   """For a j-th candidate group, compute entropy of 2^{j} possible outcomes.
