@@ -1,5 +1,7 @@
 # Group Testing: screening more individuals with less tests
 
+**Disclaimer: this is not an official Google product.**
+
 This folder contains the implementation of our [recent work on group testing](https://arxiv.org/abs/2004.12508), as described in our [blog post](https://ai.googleblog.com/2020/07/exploring-faster-screening-with-fewer.html).
 
 In this work we revisit the [group testing problem](https://en.wikipedia.org/wiki/Group_testing), in which one can take advantage of testing pooled samples to accelerate the detection of infectious individuals in a large population. It is well known that the noisiness of tests (*i.e.* when there is a non-zero probability of seeing the test return as negative when the tested person is in fact infected, or vice-versa) can significantly degrade the performance of [classic Dorfman splitting](https://en.wikipedia.org/wiki/Group_testing#Invention_and_initial_progress) and more generally of [combinatorial approaches](https://en.wikipedia.org/wiki/Group_testing#Combinatorial_group_testing). We consider here a new strategy that can be used in such a noisy regime by relying instead on a purely Bayesian approach.
