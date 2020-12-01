@@ -34,15 +34,15 @@ description = ('Group Testing. This is the code that allows reproducing '
 
 
 setuptools.setup(
-    name='group-testing',
+    name='group_testing',
     version=VERSION,
     packages=setuptools.find_packages(),
     description=description,
     long_description=description,
-    url='https://github.com/google-research/group-testing',
+    url='https://github.com/google-research/group_testing',
     author='Google LLC',
     author_email='opensource@google.com',
     install_requires=install_requires,
     license='Apache 2.0',
-    keywords='bayesian group testing particles',
+    keywords='bayesian group testing monte carlo',
 )
